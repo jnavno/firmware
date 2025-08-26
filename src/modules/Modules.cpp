@@ -282,6 +282,7 @@ void setupModules()
         traceRouteModule = new TraceRouteModule();
 #endif
     }
+    Serial.println("[Modules] creating TreeGuardModule()");
     new TreeGuardModule();
     // NOTE! This module must be added LAST because it likes to check for replies from other modules and avoid sending extra
     // acks
