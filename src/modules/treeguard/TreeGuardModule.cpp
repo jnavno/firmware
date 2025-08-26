@@ -165,12 +165,14 @@ void TreeGuardModule::goToDeepSleep()
     esp_deep_sleep_start();
 }
 
-void TreeGuardModule::loop()
+int32_t TreeGuardModule::runOnce()
 {
+    sendText("TG_BOOT"); // quick end-to-end radio check
     static bool ran = false;
     if (ran)
         return;
     ran = true;
+    Serial.println("[TreeGuard] runOnce() start");
 
     TG_warnIfIntNotRTC();
 
@@ -192,4 +194,6 @@ void TreeGuardModule::loop()
 
     delay(4000); // let radio TX
     goToDeepSleep();
+    // We never get here (deep sleep), but return type required.
+    return 0;
 }
