@@ -13,5 +13,6 @@
   },
   "files.associations": {
     "*.bak2": "cpp"
-  }
+  },
+  "python.languageServer": "None"
 }
