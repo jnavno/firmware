@@ -51,25 +51,15 @@ TreeGuardModule::TreeGuardModule()
     Serial.println("[TreeGuard] module constructed");
     // Register observer for deep sleep preparation
     notifyDeepSleepObserver.observe(&notifyDeepSleep);
-    
-    // Check wake cause - if waking from deep sleep, run immediately
-    // Otherwise wait 30 seconds for system initialization
-    const auto wake = esp_sleep_get_wakeup_cause();
-    if (wake == ESP_SLEEP_WAKEUP_EXT0 || wake == ESP_SLEEP_WAKEUP_TIMER) {
-        Serial.println("[TreeGuard] Waking from deep sleep, running immediately");
-        setIntervalFromNow(100); // Run almost immediately (100ms)
-    } else {
-        Serial.println("[TreeGuard] First boot, delaying 30 seconds");
-        setIntervalFromNow(30 * 1000); // Wait for system initialization
-    }
+
+    // Always wait 30 seconds for system initialization
+    // Classification and message sending happens within this window
+    Serial.println("[TreeGuard] Delaying 5 seconds for system initialization");
+    setIntervalFromNow(5 * 1000);
 }
 
 void TreeGuardModule::sendText(const char *message)
 {
-    if (!service) {
-        Serial.println("[TreeGuard] ERROR: service is NULL, cannot send message");
-        return;
-    }
     if (!message) {
         Serial.println("[TreeGuard] ERROR: message is NULL");
         return;
@@ -79,7 +69,7 @@ void TreeGuardModule::sendText(const char *message)
     Serial.println(message);
 
     meshtastic_MeshPacket pkt = meshtastic_MeshPacket_init_default;
-    pkt.to = 0xffffffff; // broadcast to all
+    pkt.to = 0; // broadcast
     pkt.want_ack = false;
 
     // Send as a TEXT message directly in decoded fields (no Data/DataApp wrapper)
@@ -99,7 +89,7 @@ void TreeGuardModule::sampleAccelBlock()
     const unsigned long dt_us = 1000000UL / TG_ACCEL_SAMPLE_RATE_HZ;
     unsigned long t_next = micros();
 
-    for (int i = 0; i < FFT_N; ++i) {
+    for (int i = 0; i < TG_ACCEL_NUM_SAMPLES; i++) {
         int16_t ax, ay, az, gx, gy, gz;
         s_mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
         g_ax[i] = ax;
@@ -236,8 +226,8 @@ int32_t TreeGuardModule::runOnce()
 
     // Send boot message after processing wake event
     sendText("TG_BOOT");
-    
-    delay(10000); // Wait for radio TX queue to empty (10 seconds)
+
+    delay(15000); // Wait for radio TX queue to empty (15 seconds)
     goToDeepSleep();
     // We never get here (deep sleep), but return type required.
     return 0;
