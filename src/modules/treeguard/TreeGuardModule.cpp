@@ -216,7 +216,7 @@ int32_t TreeGuardModule::runOnce()
         processTimerWake();
     }
 
-    delay(4000); // let radio TX
+    delay(10000); // Wait for radio TX queue to empty (10 seconds)
     goToDeepSleep();
     // We never get here (deep sleep), but return type required.
     return 0;
