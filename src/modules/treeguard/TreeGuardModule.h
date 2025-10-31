@@ -8,7 +8,7 @@ class TreeGuardModule : public SinglePortModule
     // Register as a single-port module; we use it only to TX text
     TreeGuardModule();
     // Run once after boot, then we deep sleep.
-    int32_t runOnce() override;
+    int32_t runOnce();
 
   private:
     void sendText(const char *message);

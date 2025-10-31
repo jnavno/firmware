@@ -191,7 +191,7 @@ int32_t TreeGuardModule::runOnce()
     sendText("TG_BOOT"); // quick end-to-end radio check
     static bool ran = false;
     if (ran)
-        return;
+        return 0;
     ran = true;
     Serial.println("[TreeGuard] runOnce() start");
 
