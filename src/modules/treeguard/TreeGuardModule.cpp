@@ -45,7 +45,8 @@ static inline void TG_warnIfIntNotRTC()
 }
 
 TreeGuardModule::TreeGuardModule()
-    : SinglePortModule("treeguard", meshtastic_PortNum_TEXT_MESSAGE_APP) // <- OK to use TEXT_MESSAGE_APP
+    : SinglePortModule("treeguard", meshtastic_PortNum_TEXT_MESSAGE_APP), // <- OK to use TEXT_MESSAGE_APP
+      OSThread("TreeGuard")
 {
     Serial.println("[TreeGuard] module constructed");
     // Register observer for deep sleep preparation
