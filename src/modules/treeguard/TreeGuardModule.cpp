@@ -51,6 +51,8 @@ TreeGuardModule::TreeGuardModule()
     Serial.println("[TreeGuard] module constructed");
     // Register observer for deep sleep preparation
     notifyDeepSleepObserver.observe(&notifyDeepSleep);
+    // Delay first execution to allow system to fully initialize (30 seconds)
+    setIntervalFromNow(30 * 1000);
 }
 
 void TreeGuardModule::sendText(const char *message)
