@@ -2527,7 +2527,7 @@ void TreeGuardModule::requestSleep()
 
 2. **Verify wake functionality:**
    - Test EXT0 wake (accelerometer interrupt)
-   - Test timer wake (24h status updates)
+   - Test timer wake (72h status updates)
    - Verify wake cause detection
 
 3. **Verify NodeDB persistence:**
