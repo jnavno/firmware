@@ -7,6 +7,7 @@
 
 #include "mesh/MeshService.h"
 #include "meshtastic/mesh.pb.h" // PortNum + MeshPacket types
+#include "sleep.h" // Meshtastic deep sleep integration
 #include <cstring>
 
 extern MeshService *service; // provided by Meshtastic core
@@ -26,10 +27,6 @@ extern MeshService *service; // provided by Meshtastic core
 #ifndef TG_ACCEL_SAMPLE_RATE_HZ
 #define TG_ACCEL_SAMPLE_RATE_HZ 333
 #endif
-#ifndef STATUS_UPDATE_INTERVAL_S
-#define STATUS_UPDATE_INTERVAL_S (24 * 3600)
-#endif
-#define uS_TO_S_FACTOR 1000000ULL
 
 static MPU6050 s_mpu;
 #ifdef USE_MAX1704X
@@ -51,6 +48,8 @@ TreeGuardModule::TreeGuardModule()
     : SinglePortModule("treeguard", meshtastic_PortNum_TEXT_MESSAGE_APP) // <- OK to use TEXT_MESSAGE_APP
 {
     Serial.println("[TreeGuard] module constructed");
+    // Register observer for deep sleep preparation
+    notifyDeepSleepObserver.observe(&notifyDeepSleep);
 }
 
 void TreeGuardModule::sendText(const char *message)
@@ -143,26 +142,48 @@ void TreeGuardModule::processVibrationWake()
     sendText(msg);
 }
 
-void TreeGuardModule::goToDeepSleep()
+int TreeGuardModule::prepareDeepSleep(void *unused)
 {
-    Wire.end();
-    TG_vextOff();
-    delay(30);
-
+    // This observer callback is called by Meshtastic before entering deep sleep
+    // We use it to configure the EXT0 wake source for GPIO interrupt
+    Serial.println("[TreeGuard] Preparing for deep sleep...");
+    
+    // Configure GPIO 7 for EXT0 wake (vibration sensor interrupt)
     if (rtc_gpio_is_valid_gpio((gpio_num_t)TG_INT_PIN)) {
         pinMode(TG_INT_PIN, INPUT_PULLDOWN);
         rtc_gpio_pullup_dis((gpio_num_t)TG_INT_PIN);
         rtc_gpio_pulldown_en((gpio_num_t)TG_INT_PIN);
-        esp_sleep_enable_ext0_wakeup((gpio_num_t)TG_INT_PIN, 1);
+        esp_sleep_enable_ext0_wakeup((gpio_num_t)TG_INT_PIN, 1); // Wake on HIGH
+        Serial.println("[TreeGuard] EXT0 wake enabled on GPIO 7");
     } else {
-        Serial.println("[TreeGuard] EXT0 disabled: INT pin not RTC-capable");
+        Serial.println("[TreeGuard] WARNING: GPIO 7 not RTC-capable, timer-only wake");
     }
+    
+    // Power down VEXT sensors
+    TG_vextOff();
+    delay(TG_VEXT_POWERDOWN_DELAY_MS);
+    Serial.println("[TreeGuard] VEXT powered down");
+    
+    // Note: Wire.end() is handled by Meshtastic's doDeepSleep() at line 338 of sleep.cpp
+    // We don't call it here to avoid conflicts
+    
+    return 0; // Must return 0
+}
 
-    esp_sleep_enable_timer_wakeup((uint64_t)STATUS_UPDATE_INTERVAL_S * uS_TO_S_FACTOR);
-    Serial.println("[TreeGuard] Deep sleep start");
+void TreeGuardModule::goToDeepSleep()
+{
+    Serial.println("[TreeGuard] Entering deep sleep for 72 hours or until vibration detected");
     Serial.flush();
     delay(100);
-    esp_deep_sleep_start();
+    
+    // Use Meshtastic's doDeepSleep() which will:
+    // 1. Call our prepareDeepSleep() observer to configure EXT0 and power down VEXT
+    // 2. Handle all the standard cleanup (I2C, Bluetooth, screen, etc.)
+    // 3. Configure timer wake for 72 hours
+    // 4. Enter deep sleep via cpuDeepSleep()
+    doDeepSleep(TG_TIMER_WAKE_SECONDS * 1000ULL, false, false);
+    
+    // Never returns - device will reset on wake
 }
 
 int32_t TreeGuardModule::runOnce()
@@ -177,7 +198,7 @@ int32_t TreeGuardModule::runOnce()
     TG_warnIfIntNotRTC();
 
     TG_vextOn();
-    delay(150);
+    delay(TG_VEXT_POWERUP_DELAY_MS); // 200ms for sensor stabilization
     Wire.begin(TG_I2C_SDA, TG_I2C_SCL);
 
     const auto wake = esp_sleep_get_wakeup_cause();

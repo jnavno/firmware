@@ -1,5 +1,6 @@
 #pragma once
 #include "mesh/SinglePortModule.h" // <- IMPORTANT: use SinglePortModule
+#include "Observer.h"
 
 class TreeGuardModule : public SinglePortModule
 {
@@ -15,4 +16,9 @@ class TreeGuardModule : public SinglePortModule
     void processTimerWake();
     void processVibrationWake();
     void goToDeepSleep();
+    
+    // Observer callback for deep sleep preparation
+    int prepareDeepSleep(void *unused);
+    CallbackObserver<TreeGuardModule, void *> notifyDeepSleepObserver =
+        CallbackObserver<TreeGuardModule, void *>(this, &TreeGuardModule::prepareDeepSleep);
 };

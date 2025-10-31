@@ -174,6 +174,21 @@ extern int TG_SAMPLES;     // count (optional; define if used)
 #endif
 
 /* ─────────────────────────────────────────────
+   Deep sleep timing constants
+   ───────────────────────────────────────────── */
+#ifndef TG_TIMER_WAKE_SECONDS
+#define TG_TIMER_WAKE_SECONDS 259200  // 72 hours fallback timer
+#endif
+
+#ifndef TG_VEXT_POWERUP_DELAY_MS
+#define TG_VEXT_POWERUP_DELAY_MS 200  // Sensor stabilization time
+#endif
+
+#ifndef TG_VEXT_POWERDOWN_DELAY_MS
+#define TG_VEXT_POWERDOWN_DELAY_MS 50  // Sensor shutdown time
+#endif
+
+/* ─────────────────────────────────────────────
    VEXT helpers (active-LOW on Heltec V3)
    ───────────────────────────────────────────── */
 inline void TG_vextOn()
