@@ -7,10 +7,15 @@
 
 #include "mesh/MeshService.h"
 #include "meshtastic/mesh.pb.h" // PortNum + MeshPacket types
-#include "sleep.h" // Meshtastic deep sleep integration
+#include "sleep.h"              // Meshtastic deep sleep integration
 #include <cstring>
 
+#include "NodeDB.h"
+#include "Router.h" // for extern router
+#include "configuration.h"
+#include "meshUtils.h"       // for generatePacketId()
 extern MeshService *service; // provided by Meshtastic core
+extern Router *router;
 
 #include "modules/treeguard/TreeGuardPins.h"
 #include "modules/treeguard/classifier.h"
@@ -33,9 +38,15 @@ static MPU6050 s_mpu;
 static SFE_MAX1704X s_gauge;
 #endif
 
+// classifier window (what the FFT-based code expects)
+static constexpr uint16_t TG_CLS_WINDOW = FFT_N; // from classifier (1024)
+
 static float g_ax[FFT_N];
 static float g_ay[FFT_N];
 static float g_az[FFT_N];
+
+static constexpr uint8_t TG_ALERTAS_CH = 3;
+static constexpr uint8_t TG_CH_ADMINRED = 2; // status / IoT / debug
 
 static inline void TG_warnIfIntNotRTC()
 {
@@ -60,36 +71,115 @@ TreeGuardModule::TreeGuardModule()
 
 void TreeGuardModule::sendText(const char *message)
 {
-    if (!message) {
-        Serial.println("[TreeGuard] ERROR: message is NULL");
+    if (!message || !service) {
+        Serial.println("[TreeGuard] ERROR: message/service is NULL");
         return;
     }
 
     Serial.print("[TreeGuard] Sending message: ");
     Serial.println(message);
 
+    // Allocate a packet structure
     meshtastic_MeshPacket pkt = meshtastic_MeshPacket_init_default;
-    pkt.to = 0; // broadcast
-    pkt.want_ack = false;
 
-    // Send as a TEXT message directly in decoded fields (no Data/DataApp wrapper)
+    // --- BASIC PACKET ROUTING ---
+    pkt.to = 0xFFFFFFFF; // broadcast to all
+    pkt.from = 0;        // filled automatically on TX
+    pkt.hop_limit = 3;   // standard for general messages
+    pkt.want_ack = false;
+    pkt.priority = meshtastic_MeshPacket_Priority_DEFAULT;
+    pkt.id = generatePacketId(); // unique ID from core utility
+
+    // --- CHANNEL ---
+    // Pull current node channel index from NodeDB
+    auto *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
+    pkt.channel = TG_ALERTAS_CH; // use 0 if unknown
+
+    // --- PAYLOAD ---
+    pkt.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     pkt.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
 
     const size_t maxlen = sizeof(pkt.decoded.payload.bytes);
-    const size_t len = strnlen(message, maxlen);
+    size_t len = strnlen(message, maxlen);
     memcpy(pkt.decoded.payload.bytes, message, len);
     pkt.decoded.payload.size = (pb_size_t)len;
 
-    service->sendToMesh(&pkt);
+    // --- SEND INTO MESH ---
+    service->sendToMesh(packetPool.allocCopy(pkt), RX_SRC_LOCAL, false);
+
     Serial.println("[TreeGuard] Message queued for transmission");
+}
+
+bool TreeGuardModule::captureVibration333(TG_VibCapture &cap)
+{
+    Serial.println("[TreeGuard] VIB: sampling (12s @ 333Hz) ...");
+
+    const uint32_t interval_us = 1000000UL / TG_SAMPLE_HZ; // ≈ 3003 us
+    uint32_t next_ts = micros();
+
+    for (uint16_t i = 0; i < TG_NUM_SAMPLES; ++i) {
+        int16_t ax, ay, az, gx, gy, gz;
+
+        // read raw accel+gyro (MPU6050 style API)
+        s_mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+        cap.ax[i] = ax;
+        cap.ay[i] = ay;
+        cap.az[i] = az;
+
+        // schedule next sample
+        next_ts += interval_us;
+        // busy-wait to keep timing tight
+        while ((int32_t)(micros() - next_ts) < 0) {
+            // optional: yield() if you trust it not to jitter too much
+        }
+    }
+
+    Serial.println("[TreeGuard] VIB: sampling done.");
+    return true;
+}
+
+String TreeGuardModule::classifyFromCapture(const TG_VibCapture &cap, Features *outFeatures, float &hf, float &r1, float &r2,
+                                            int &sc)
+{
+    // static to avoid big stack frames
+    static float fx[FFT_N];
+    static float fy[FFT_N];
+    static float fz[FFT_N];
+
+    // pick the last 1024 samples from the 12s capture
+    uint16_t start = 0;
+    if (TG_NUM_SAMPLES > FFT_N) {
+        start = TG_NUM_SAMPLES - FFT_N; // 3996 - 1024 = 2972
+    }
+
+    for (uint16_t i = 0; i < FFT_N; ++i) {
+        fx[i] = (float)cap.ax[start + i];
+        fy[i] = (float)cap.ay[start + i];
+        fz[i] = (float)cap.az[start + i];
+    }
+
+    Features localFeat;
+    Features *featPtr = outFeatures ? outFeatures : &localFeat;
+
+    String label = classifyBufferedData(fx, fy, fz, FFT_N, featPtr);
+
+    // expose the 3 values to format the message
+    hf = featPtr->hf_energy;
+    r1 = featPtr->fft_0_25_ratio;
+    r2 = featPtr->fft_125_200_ratio;
+    sc = featPtr->strike_count;
+
+    return label;
 }
 
 void TreeGuardModule::sampleAccelBlock()
 {
     const unsigned long dt_us = 1000000UL / TG_ACCEL_SAMPLE_RATE_HZ;
     unsigned long t_next = micros();
-
-    for (int i = 0; i < TG_ACCEL_NUM_SAMPLES; i++) {
+    // only sample as many as we actually have space for
+    const int N = min((int)TG_ACCEL_NUM_SAMPLES, (int)FFT_N);
+    for (int i = 0; i < N; i++) {
         int16_t ax, ay, az, gx, gy, gz;
         s_mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
         g_ax[i] = ax;
@@ -124,21 +214,27 @@ void TreeGuardModule::processTimerWake()
 
 void TreeGuardModule::processVibrationWake()
 {
+    Serial.println("[TreeGuard] VIB: start");
     s_mpu.initialize();
     if (!s_mpu.testConnection()) {
         sendText("ALARM,MPU6050_FAIL");
         return;
     }
+    Serial.println("[TreeGuard] VIB: MPU ok");
+
     s_mpu.setSleepEnabled(false);
     delay(100);
     s_mpu.setStandbyXGyroEnabled(true);
     s_mpu.setStandbyYGyroEnabled(true);
     s_mpu.setStandbyZGyroEnabled(true);
 
+    Serial.println("[TreeGuard] VIB: sampling...");
     sampleAccelBlock();
+    Serial.println("[TreeGuard] VIB: sampling done, classify...");
 
+    int N = min((int)TG_ACCEL_NUM_SAMPLES, (int)FFT_N);
     Features f{};
-    String result = classifyBufferedData(g_ax, g_ay, g_az, (int)FFT_N, &f);
+    String result = classifyBufferedData(g_ax, g_ay, g_az, N, &f);
 
     float v = 0.f, soc = 0.f;
 #ifdef USE_MAX1704X
@@ -152,6 +248,7 @@ void TreeGuardModule::processVibrationWake()
     snprintf(msg, sizeof(msg), "TG,%s,hfe:%.2f,r1:%.2f,r2:%.2f,sc:%d,V:%.2f,SOC:%.1f", result.c_str(), f.hf_energy,
              f.fft_0_25_ratio, f.fft_125_200_ratio, f.strike_count, v, soc);
     sendText(msg);
+    Serial.println("[TreeGuard] VIB: sent TG message");
 }
 
 int TreeGuardModule::prepareDeepSleep(void *unused)
@@ -215,19 +312,50 @@ int32_t TreeGuardModule::runOnce()
     const auto wake = esp_sleep_get_wakeup_cause();
     if (wake == ESP_SLEEP_WAKEUP_EXT0) {
         Serial.println("[TreeGuard] Wake: EXT0 (shake)");
-        processVibrationWake();
-    } else if (wake == ESP_SLEEP_WAKEUP_TIMER) {
-        Serial.println("[TreeGuard] Wake: TIMER");
-        processTimerWake();
+
+        // 1. capture raw
+        static TG_VibCapture cap;
+        if (captureVibration333(cap)) {
+            // 2. classify
+            float hf, r1, r2;
+            int sc;
+            Features feats; // from classifier.h
+            String label = classifyFromCapture(cap, &feats, hf, r1, r2, sc);
+
+            // 3. format message
+            char msg[160];
+            snprintf(msg, sizeof(msg), "TG,%s,hfe:%.2f,r1:%.2f,r2:%.2f,sc:%d,V:0.00,SOC:0.0", label.c_str(), hf, r1, r2, sc);
+
+            sendText(msg);
+            Serial.println("[TreeGuard] VIB: sent TG message");
+        } else {
+            sendText("TG,⚠️ VIB_CAPTURE_FAIL,V:0.00,SOC:0.0");
+        }
+
+        sendText("TG_BOOT");
     } else {
         Serial.println("[TreeGuard] Wake: power-on/other -> STATUS");
-        processTimerWake();
+        sendText("STAT,V:0.00,SOC:0.0,T:27.0");
+        sendText("TG_BOOT");
     }
 
-    // Send boot message after processing wake event
-    sendText("TG_BOOT");
+    // 4. give radio a moment to tx (your queue was 16 entries)
+    uint32_t t0 = millis();
+    while ((millis() - t0) < 2000) {
+        meshtastic_QueueStatus qs = router->getQueueStatus();
+        if (qs.free == qs.maxlen) {
+            Serial.printf("[TreeGuard] TX queue drained: %u / %u\n", qs.free, qs.maxlen);
+            break;
+        }
+        // don't spam every 100 ms, print only first time
+        static bool printed = false;
+        if (!printed) {
+            Serial.printf("[TreeGuard] TX queue: free=%u / %u (waiting)\n", qs.free, qs.maxlen);
+            printed = true;
+        }
+        delay(100);
+    }
 
-    delay(15000); // Wait for radio TX queue to empty (15 seconds)
     goToDeepSleep();
     // We never get here (deep sleep), but return type required.
     return 0;
