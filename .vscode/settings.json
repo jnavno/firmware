@@ -12,7 +12,35 @@
     "editor.defaultFormatter": "ms-vscode.powershell"
   },
   "files.associations": {
-    "*.bak2": "cpp"
+    "*.page-template": "vue",
+    "*.layout-template": "vue",
+    "*.vue": "vue",
+    "*.cl": "opencl",
+    "*.j2": "jinja-html",
+    "*.xml": "xml",
+    "*.py": "python",
+    "*.html": "html",
+    "*.el": "plaintext",
+    "*.json5": "json",
+    "*.fs": "fsharp",
+    "*.bak2": "cpp",
+    "atomic": "cpp",
+    "cstdint": "cpp",
+    "random": "cpp",
+    "*.tcc": "cpp",
+    "*.tpp": "cpp",
+    "array": "cpp",
+    "deque": "cpp",
+    "list": "cpp",
+    "string": "cpp",
+    "unordered_map": "cpp",
+    "unordered_set": "cpp",
+    "vector": "cpp",
+    "string_view": "cpp",
+    "initializer_list": "cpp",
+    "istream": "cpp",
+    "ostream": "cpp",
+    "sstream": "cpp"
   },
   "python.languageServer": "None"
 }

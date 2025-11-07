@@ -5,10 +5,11 @@
 
 #include "Observer.h"
 #include "concurrency/OSThread.h"
-#include "mesh/SinglePortModule.h"
+#include "mesh/ProtobufModule.h"
 
 // we still include these, that's fine
 #include "modules/treeguard/fft/fft_config.h"
+#include <meshtastic/treeguard.pb.h>
 
 // ── 1) define the constants ONCE here ─────────────────────────────
 static constexpr uint16_t TG_SAMPLE_HZ = 333;
@@ -17,7 +18,7 @@ static constexpr uint16_t TG_NUM_SAMPLES = TG_SAMPLE_HZ * TG_CAPTURE_SEC;
 
 struct Features;
 
-class TreeGuardModule : public SinglePortModule, private concurrency::OSThread
+class TreeGuardModule : public ProtobufModule<_meshtastic_TreeGuardMetrics>, private concurrency::OSThread
 {
   public:
     TreeGuardModule();
@@ -31,9 +32,11 @@ class TreeGuardModule : public SinglePortModule, private concurrency::OSThread
 
   protected:
     int32_t runOnce() override;
+    bool handleReceivedProtobuf(const meshtastic_MeshPacket &p, _meshtastic_TreeGuardMetrics *msg) override;
 
   private:
-    void sendText(const char *message);
+    void sendText(const char *message, uint8_t channel);
+    void sendProto(const _meshtastic_TreeGuardMetrics &msg, uint8_t channel);
     void sampleAccelBlock();
     void processTimerWake();
     void processVibrationWake();

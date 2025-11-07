@@ -45,7 +45,8 @@ static float g_ax[FFT_N];
 static float g_ay[FFT_N];
 static float g_az[FFT_N];
 
-static constexpr uint8_t TG_ALERTAS_CH = 3;
+static constexpr uint8_t TG_CH_ALERTAS = 3;
+static constexpr uint8_t TG_CH_REDUVERD = 4;
 static constexpr uint8_t TG_CH_ADMINRED = 2; // status / IoT / debug
 
 static inline void TG_warnIfIntNotRTC()
@@ -56,7 +57,7 @@ static inline void TG_warnIfIntNotRTC()
 }
 
 TreeGuardModule::TreeGuardModule()
-    : SinglePortModule("treeguard", meshtastic_PortNum_TEXT_MESSAGE_APP), // <- OK to use TEXT_MESSAGE_APP
+    : ProtobufModule<_meshtastic_TreeGuardMetrics>("treeguard", meshtastic_PortNum_TEXT_MESSAGE_APP, &meshtastic_TreeGuardMetrics_msg), // <- OK to use TEXT_MESSAGE_APP
       OSThread("TreeGuard")
 {
     Serial.println("[TreeGuard] module constructed");
@@ -69,7 +70,7 @@ TreeGuardModule::TreeGuardModule()
     setIntervalFromNow(5 * 1000);
 }
 
-void TreeGuardModule::sendText(const char *message)
+void TreeGuardModule::sendText(const char *message, uint8_t channel=TG_CH_ALERTAS )
 {
     if (!message || !service) {
         Serial.println("[TreeGuard] ERROR: message/service is NULL");
@@ -93,7 +94,7 @@ void TreeGuardModule::sendText(const char *message)
     // --- CHANNEL ---
     // Pull current node channel index from NodeDB
     auto *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
-    pkt.channel = TG_ALERTAS_CH; // use 0 if unknown
+    pkt.channel = channel; // use 0 if unknown
 
     // --- PAYLOAD ---
     pkt.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
@@ -108,6 +109,38 @@ void TreeGuardModule::sendText(const char *message)
     service->sendToMesh(packetPool.allocCopy(pkt), RX_SRC_LOCAL, false);
 
     Serial.println("[TreeGuard] Message queued for transmission");
+}
+
+void TreeGuardModule::sendProto(const _meshtastic_TreeGuardMetrics &msg, uint8_t channel=TG_CH_REDUVERD)
+{
+    if (!service) {
+        Serial.println("[TreeGuard] ERROR: service is NULL");
+        return;
+    }
+
+    Serial.printf("[TreeGuard] Sending Proto message: %d\n",msg.timestamp_ms);
+
+    // Allocate a packet structure
+    meshtastic_MeshPacket *pkt = allocDataProtobuf(msg);
+
+    // --- BASIC PACKET ROUTING ---
+    // pkt->to = 0xFFFFFFFF; // broadcast to all
+    // pkt->from = 0;        // filled automatically on TX
+    // pkt->hop_limit = 3;   // standard for general messages
+    // pkt->want_ack = false;
+    // pkt->priority = meshtastic_MeshPacket_Priority_DEFAULT;
+    // pkt->id = generatePacketId(); // unique ID from core utility
+
+    // --- CHANNEL ---
+    // Pull current node channel index from NodeDB
+    // auto *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
+    pkt->channel = channel; // use 0 if unknown
+
+
+    // --- SEND INTO MESH ---
+    service->sendToMesh(pkt, RX_SRC_LOCAL, false);
+
+    Serial.println("[TreeGuard] Proto Message queued for transmission");
 }
 
 bool TreeGuardModule::captureVibration333(TG_VibCapture &cap)
@@ -209,7 +242,7 @@ void TreeGuardModule::processTimerWake()
 
     char msg[128];
     snprintf(msg, sizeof(msg), "STAT,V:%.2f,SOC:%.1f,T:%.1f", v, soc, tC);
-    sendText(msg);
+    sendText(msg, TG_CH_ALERTAS);
 }
 
 void TreeGuardModule::processVibrationWake()
@@ -326,10 +359,27 @@ int32_t TreeGuardModule::runOnce()
             char msg[160];
             snprintf(msg, sizeof(msg), "TG,%s,hfe:%.2f,r1:%.2f,r2:%.2f,sc:%d,V:0.00,SOC:0.0", label.c_str(), hf, r1, r2, sc);
 
-            sendText(msg);
+            sendText(msg , TG_CH_ALERTAS);
+
+//THIS IS JUST A TEST
+            meshtastic_TreeGuardMetrics metrics = meshtastic_TreeGuardMetrics_init_zero;
+
+            metrics.timestamp_ms = millis();
+            metrics.strike_count = 42;
+            metrics.offset_x_y = 0.15f;
+            metrics.offset_y_z = 0.23f;
+            metrics.max_y = 1.2f;
+            metrics.max_z = 0.8f;
+            metrics.fft_low_ratio = 0.35f;
+            metrics.fft_high_ratio = 0.12f;
+            metrics.hf_energy_ratio = 0.08f;
+            metrics.battery_soc_percent = 87.5f;
+
+            sendProto(metrics);
+
             Serial.println("[TreeGuard] VIB: sent TG message");
         } else {
-            sendText("TG,⚠️ VIB_CAPTURE_FAIL,V:0.00,SOC:0.0");
+            sendText("TG,⚠️ VIB_CAPTURE_FAIL,V:0.00,SOC:0.0", TG_CH_ADMINRED);
         }
 
         sendText("TG_BOOT");
@@ -359,4 +409,9 @@ int32_t TreeGuardModule::runOnce()
     goToDeepSleep();
     // We never get here (deep sleep), but return type required.
     return 0;
+}
+
+bool TreeGuardModule::handleReceivedProtobuf(const meshtastic_MeshPacket &p, _meshtastic_TreeGuardMetrics *msg)
+{
+    return true;
 }
